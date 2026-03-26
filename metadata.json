@@ -1,0 +1,5 @@
+{
+  "name": "Gold Signal Algo Trader",
+  "description": "An automated trading dashboard that monitors live Gold charts, detects signals, and manages trades with trailing stop loss and profit-taking logic.",
+  "requestFramePermissions": []
+}
