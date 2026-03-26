@@ -1,4 +1,4 @@
-export type SignalType = 'BUY' | 'SELL' | 'CLOSE';
+export type SignalType = 'LONG' | 'SHORT' | 'EXIT_LONG' | 'EXIT_SHORT';
 
 export interface Trade {
   id: string;
@@ -7,13 +7,10 @@ export interface Trade {
   currentPrice: number;
   quantity: number;
   stopLoss: number;
-  takeProfit: number;
-  trailingStop: number | null;
   pnl: number;
   maxPnLReached: number;
   maxLossReached: number;
   pnlBooked: number;
-  pnlBeingTrailed: number;
   status: 'OPEN' | 'CLOSED';
   entryTime: Date;
   closeTime?: Date;

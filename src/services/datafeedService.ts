@@ -5,8 +5,6 @@
 
 import { format } from 'date-fns';
 
-const API_ENDPOINT = 'https://api.kraken.com/0/public';
-
 export interface Bar {
   time: number;
   low: number;
@@ -34,107 +32,70 @@ export interface SymbolInfo {
 
 export class DatafeedService {
   private subscribers: Map<string, (bar: Bar) => void> = new Map();
-  private socket: WebSocket | null = null;
   private pollInterval: any = null;
 
   constructor() {
-    this.initWebSocket();
-    this.startPollingFallback();
+    this.startPolling();
   }
 
-  private initWebSocket() {
-    try {
-      this.socket = new WebSocket('wss://ws.kraken.com');
-      
-      this.socket.onopen = () => {
-        console.log('[WebSocket] Kraken Connected');
-        const subRequest = {
-          event: 'subscribe',
-          pair: ['XAU/USD'],
-          subscription: { name: 'ticker' }
-        };
-        this.socket?.send(JSON.stringify(subRequest));
-      };
-
-      this.socket.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (Array.isArray(data) && data[1] && data[1].c) {
-          const price = parseFloat(data[1].c[0]);
-          const bar: Bar = {
-            time: Math.floor(Date.now() / 1000),
-            open: price,
-            high: price,
-            low: price,
-            close: price,
-          };
-          this.subscribers.forEach(callback => callback(bar));
-        }
-      };
-
-      this.socket.onclose = () => {
-        console.log('[WebSocket] Kraken Disconnected, retrying...');
-        setTimeout(() => this.initWebSocket(), 5000);
-      };
-    } catch (error) {
-      console.error('[WebSocket] Kraken Init Error:', error);
-    }
-  }
-
-  private startPollingFallback() {
+  private startPolling() {
     if (this.pollInterval) clearInterval(this.pollInterval);
+    
+    // Poll our internal proxy every 2 seconds
     this.pollInterval = setInterval(async () => {
-      if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
-        try {
-          const response = await fetch(`${API_ENDPOINT}/Ticker?pair=XAUUSD`);
-          if (response.ok) {
-            const data = await response.json();
-            const pairKey = Object.keys(data.result)[0];
-            const price = parseFloat(data.result[pairKey].c[0]);
-            if (!isNaN(price)) {
-              const bar: Bar = {
-                time: Math.floor(Date.now() / 1000),
-                open: price,
-                high: price,
-                low: price,
-                close: price,
-              };
-              this.subscribers.forEach(callback => callback(bar));
-            }
+      try {
+        const response = await fetch('/api/price/xauusd');
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.price) {
+            const bar: Bar = {
+              time: data.time || Math.floor(Date.now() / 1000),
+              open: data.open || data.price,
+              high: data.high || data.price,
+              low: data.low || data.price,
+              close: data.price,
+            };
+            this.subscribers.forEach(callback => callback(bar));
           }
-        } catch (error) {
-          // Ignore polling errors
         }
+      } catch (error) {
+        // Ignore polling errors
       }
-    }, 3000);
+    }, 2000);
   }
 
   async getBars(symbol: string, resolution: string, from: number, to: number): Promise<Bar[]> {
-    const url = `${API_ENDPOINT}/OHLC?pair=XAUUSD&interval=1&since=${from}`;
-    
+    // For initial load, we fetch from our proxy to get the latest price and history
     try {
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (data.error && data.error.length > 0) {
-        console.error('[Datafeed] Kraken API Error:', data.error);
-        return [];
+      console.log('[Datafeed] Fetching from /api/price/xauusd');
+      const response = await fetch('/api/price/xauusd');
+      console.log('[Datafeed] Response status:', response.status);
+      if (response.ok) {
+        const data = await response.json();
+        if (data && data.bars && data.bars.length > 0) {
+          return data.bars.map((b: any) => ({
+            time: b.time,
+            open: b.open,
+            high: b.high,
+            low: b.low,
+            close: b.close,
+          }));
+        } else if (data && data.price) {
+          return [{
+            time: data.time || Math.floor(Date.now() / 1000),
+            open: data.open || data.price,
+            high: data.high || data.price,
+            low: data.low || data.price,
+            close: data.price,
+          }];
+        }
+      } else {
+        console.error('[Datafeed] Proxy Fetch Error: Response not ok', response.status);
       }
-
-      const pairKey = Object.keys(data.result).find(key => key !== 'last');
-      if (!pairKey) return [];
-
-      return data.result[pairKey].map((d: any) => ({
-        time: parseInt(d[0]),
-        open: parseFloat(d[1]),
-        high: parseFloat(d[2]),
-        low: parseFloat(d[3]),
-        close: parseFloat(d[4]),
-        volume: parseFloat(d[6])
-      }));
     } catch (error) {
-      console.error('[Datafeed] Kraken Fetch Error:', error);
-      return [];
+      console.error('[Datafeed] Proxy Fetch Error Details:', error);
     }
+    return [];
   }
 
   subscribeBars(symbol: string, resolution: string, onRealtimeCallback: (bar: Bar) => void, subscriberUid: string) {

@@ -11,9 +11,11 @@ export async function analyzeChartFrame(base64Image: string): Promise<Signal | n
         {
           parts: [
             {
-              text: `Analyze this live Gold chart. Look for trading signals (Buy/Sell/Close). 
-              Identify the current price and the signal type if any. 
-              Output the result in JSON format.`,
+              text: `Analyze this live trading chart. Look for the most recent signal marker. 
+              To find the most recent signal, scan the chart from RIGHT to LEFT. The very first signal you encounter when moving from the right edge of the chart towards the left is the current active signal.
+              The signals are typically labeled '+Smart Buy' (green) or '+Smart Sell' (red/pink). 
+              What is the most recent signal? Respond with ONLY 'BUY', 'SELL', or 'NONE' if no clear signal is found.
+              Also identify the current price if visible.`,
             },
             {
               inlineData: {
@@ -32,11 +34,11 @@ export async function analyzeChartFrame(base64Image: string): Promise<Signal | n
             signal: {
               type: Type.STRING,
               enum: ["BUY", "SELL", "CLOSE", "NONE"],
-              description: "The detected trading signal.",
+              description: "The detected trading signal (+Smart Buy -> BUY, +Smart Sell -> SELL).",
             },
             price: {
               type: Type.NUMBER,
-              description: "The current price of Gold shown on the chart.",
+              description: "The current price of the asset shown on the chart.",
             },
             confidence: {
               type: Type.NUMBER,

@@ -4,17 +4,21 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, SeriesMarker, createSeriesMarkers, ISeriesMarkersPluginApi } from 'lightweight-charts';
 import { datafeed, Bar } from '../services/datafeedService';
+import { Signal } from '../types';
 
 interface TradingViewChartProps {
   onPriceUpdate?: (price: number) => void;
+  signals?: Signal[];
+  showSignal?: boolean;
 }
 
-export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdate }) => {
+export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdate, signals, showSignal }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -51,6 +55,9 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
 
     chartRef.current = chart;
     seriesRef.current = candlestickSeries;
+    
+    // Initialize markers plugin
+    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
 
     // Initial Data Load
     const loadInitialData = async () => {
@@ -97,6 +104,36 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
       chart.remove();
     };
   }, []);
+
+  // Handle Signal Markers
+  useEffect(() => {
+    if (!markersPluginRef.current) return;
+
+    if (!showSignal || !signals || signals.length === 0) {
+      markersPluginRef.current.setMarkers([]);
+      return;
+    }
+
+    // Only show the last signal
+    const lastSignal = signals[signals.length - 1];
+    if (lastSignal.type === 'EXIT_LONG' || lastSignal.type === 'EXIT_SHORT') {
+      markersPluginRef.current.setMarkers([]);
+      return;
+    }
+
+    // Align timestamp to the minute bucket to match the chart data
+    const signalTime = (Math.floor(lastSignal.timestamp.getTime() / 60000) * 60) as Time;
+
+    const marker: SeriesMarker<Time> = {
+      time: signalTime,
+      position: lastSignal.type === 'LONG' ? 'belowBar' : 'aboveBar',
+      color: lastSignal.type === 'LONG' ? '#22c55e' : '#ef4444',
+      shape: lastSignal.type === 'LONG' ? 'arrowUp' : 'arrowDown',
+      text: lastSignal.type,
+    };
+
+    markersPluginRef.current.setMarkers([marker]);
+  }, [signals, showSignal]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
 };

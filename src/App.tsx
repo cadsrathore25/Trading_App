@@ -16,7 +16,8 @@ import {
   AlertCircle,
   CheckCircle2,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Monitor
 } from 'lucide-react';
 import { 
   LineChart, 
@@ -32,7 +33,6 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { format } from 'date-fns';
 
-import { TradingViewChart } from './components/TradingViewChart';
 import { datafeed } from './services/datafeedService';
 import { TradingEngine } from './services/tradingService';
 import { analyzeChartFrame } from './services/geminiService';
@@ -48,39 +48,24 @@ export default function App() {
   const [isAutoTrading, setIsAutoTrading] = useState(false);
   const [signals, setSignals] = useState<Signal[]>([]);
   const [currentPrice, setCurrentPrice] = useState<number>(0);
-  const [priceSource, setPriceSource] = useState<'Kraken' | 'Binance' | 'Datafeed'>('Kraken');
+  const [priceSource, setPriceSource] = useState<'Yahoo Finance' | 'Binance' | 'Datafeed'>('Datafeed');
   const [lastAnalysis, setLastAnalysis] = useState<string | null>(null);
   const [pnlHistory, setPnlHistory] = useState<{ time: string; pnl: number }[]>([]);
 
-  // Initial Price Fetching
+  // Initial Price Fetching & Subscription
   useEffect(() => {
+    let isSubscribed = true;
+
     const fetchInitialPrice = async () => {
       try {
-        // Try Datafeed first
         const bars = await datafeed.getBars('XAUUSD', '1', Math.floor(Date.now() / 1000) - 3600, Math.floor(Date.now() / 1000));
-        if (bars.length > 0) {
+        if (bars.length > 0 && isSubscribed) {
           const price = bars[bars.length - 1].close;
           setCurrentPrice(price);
           setPriceSource('Datafeed');
           engine.updateMarket(price);
           setTrades(engine.getTrades());
           setBalance(engine.getBalance());
-          return;
-        }
-
-        // Direct Kraken Fallback
-        const response = await fetch('https://api.kraken.com/0/public/Ticker?pair=XAUUSD');
-        if (response.ok) {
-          const data = await response.json();
-          const pairKey = Object.keys(data.result)[0];
-          const price = parseFloat(data.result[pairKey].c[0]);
-          if (!isNaN(price)) {
-            setCurrentPrice(price);
-            setPriceSource('Kraken');
-            engine.updateMarket(price);
-            setTrades(engine.getTrades());
-            setBalance(engine.getBalance());
-          }
         }
       } catch (error) {
         console.error("Failed to fetch initial price:", error);
@@ -88,10 +73,32 @@ export default function App() {
     };
 
     fetchInitialPrice();
+
+    // Subscribe to real-time updates
+    datafeed.subscribeBars('XAUUSD', '1', (bar) => {
+      if (isSubscribed) {
+        setCurrentPrice(bar.close);
+        setPriceSource('Datafeed');
+        engine.updateMarket(bar.close);
+        setTrades(engine.getTrades());
+        setBalance(engine.getBalance());
+      }
+    }, 'app-subscriber');
+
+    return () => {
+      isSubscribed = false;
+      datafeed.unsubscribeBars('app-subscriber');
+    };
   }, [engine]);
 
   // TradingView Ticker Widget Injection
   useEffect(() => {
+    const container = document.getElementById('tv-ticker-container');
+    if (!container) return;
+    
+    // Clear any existing content first
+    container.innerHTML = '';
+
     const script = document.createElement('script');
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
     script.async = true;
@@ -110,8 +117,14 @@ export default function App() {
       "displayMode": "adaptive",
       "locale": "en"
     });
-    const container = document.getElementById('tv-ticker-container');
-    if (container) container.appendChild(script);
+    
+    container.appendChild(script);
+
+    return () => {
+      if (container) {
+        container.innerHTML = '';
+      }
+    };
   }, []);
 
   // Update P&L history for the chart
@@ -141,37 +154,97 @@ export default function App() {
 
   const [isAutoAnalyzing, setIsAutoAnalyzing] = useState(false);
   const [autoAnalyzeInterval, setAutoAnalyzeInterval] = useState(30); // seconds
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [isScreenShared, setIsScreenShared] = useState(false);
+  const [lastScreenshot, setLastScreenshot] = useState<string | null>(null);
 
-  // Auto-analysis simulation
+  // Refs to avoid resetting the auto-analysis interval
+  const currentPriceRef = useRef(currentPrice);
+  const isAutoTradingRef = useRef(isAutoTrading);
+  const lastSignalTypeRef = useRef<SignalType | null>(null);
+
   useEffect(() => {
-    if (!isAutoAnalyzing) return;
+    currentPriceRef.current = currentPrice;
+  }, [currentPrice]);
+
+  useEffect(() => {
+    isAutoTradingRef.current = isAutoTrading;
+  }, [isAutoTrading]);
+
+  // WORKAROUND: Use Screen Capture API to bypass CORS and get the actual pixels
+  const startScreenShare = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        setIsScreenShared(true);
+        stream.getVideoTracks()[0].onended = () => {
+          setIsScreenShared(false);
+          setLastScreenshot(null);
+        };
+      }
+    } catch (err) {
+      console.error("Error sharing screen:", err);
+    }
+  };
+
+  // Background script to capture frames and analyze
+  useEffect(() => {
+    if (!isAutoAnalyzing || !isScreenShared) return;
 
     const interval = setInterval(async () => {
-      // In a real app, we would capture the iframe frame here.
-      // Since we can't due to CORS, we simulate a scan.
-      setLastAnalysis("Auto-scanning chart...");
+      if (!videoRef.current || !canvasRef.current) return;
       
-      // Simulate finding a signal 10% of the time
-      if (Math.random() > 0.9) {
-        const mockSignal: Signal = {
-          type: Math.random() > 0.5 ? 'BUY' : 'SELL',
-          price: currentPrice,
-          confidence: 0.85 + Math.random() * 0.1,
-          timestamp: new Date()
-        };
-        setSignals(prev => [mockSignal, ...prev].slice(0, 10));
-        if (isAutoTrading) {
-          engine.processSignal(mockSignal, currentPrice);
-          setTrades(engine.getTrades());
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      
+      // Ensure video has loaded metadata
+      if (video.videoWidth === 0 || video.videoHeight === 0) return;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      // 1. Take the screenshot of the background video stream
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const base64Image = canvas.toDataURL('image/jpeg', 0.8); // This is our "screenshot file"
+      
+      // 2. Display only the last taken screenshot
+      setLastScreenshot(base64Image);
+      setLastAnalysis("Analyzing captured screenshot with Gemini AI...");
+      
+      try {
+        // 3. Send the screenshot file to the AI for analysis
+        const signal = await analyzeChartFrame(base64Image);
+        if (signal) {
+          // Check if the signal changed from the last recorded one
+          if (lastSignalTypeRef.current !== signal.type) {
+            lastSignalTypeRef.current = signal.type;
+            
+            setSignals(prev => [signal, ...prev].slice(0, 10));
+            
+            if (isAutoTradingRef.current) {
+              engine.processSignal(signal, currentPriceRef.current);
+              setTrades(engine.getTrades());
+              setBalance(engine.getBalance());
+            }
+            setLastAnalysis(`New Signal Detected: ${signal.type} at ${signal.price || currentPriceRef.current}`);
+          } else {
+            setLastAnalysis(`Signal unchanged: ${signal.type}`);
+          }
+        } else {
+          setLastAnalysis("No clear signal detected.");
         }
-        setLastAnalysis(`Auto-Detected: ${mockSignal.type} at ${mockSignal.price}`);
-      } else {
-        setLastAnalysis("Auto-scan: No new signals.");
+      } catch (err) {
+        console.error(err);
+        setLastAnalysis("Analysis failed.");
       }
     }, autoAnalyzeInterval * 1000);
 
     return () => clearInterval(interval);
-  }, [isAutoAnalyzing, isAutoTrading, currentPrice, engine, autoAnalyzeInterval]);
+  }, [isAutoAnalyzing, isScreenShared, engine, autoAnalyzeInterval]);
 
   const activeTrades = trades.filter(t => t.status === 'OPEN');
   const totalPnL = activeTrades.reduce((acc, t) => acc + t.pnl, 0);
@@ -246,24 +319,48 @@ export default function App() {
       <main className="max-w-[1600px] mx-auto p-6 grid grid-cols-12 gap-6">
         {/* Left Column: Video & Market Control */}
         <div className="col-span-12 lg:col-span-8 space-y-6">
-          {/* YouTube Video: The Signal Source */}
-          <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl group">
-            <iframe 
-              width="100%" 
-              height="100%" 
-              src={`https://www.youtube.com/embed/${YOUTUBE_URL.split('v=')[1]}?autoplay=1&mute=1&controls=1`}
-              title="YouTube video player" 
-              frameBorder="0" 
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
-              allowFullScreen
-              className="absolute inset-0"
-            ></iframe>
-            <div className="absolute top-4 left-4 flex gap-2">
-              <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 text-xs font-mono flex items-center gap-2">
-                <Play size={14} className="text-orange-500" />
-                SIGNAL SOURCE: LIVE VIDEO
+          {/* Screen Share: The Signal Source */}
+          <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl group flex items-center justify-center">
+            {!isScreenShared ? (
+              <div className="text-center space-y-4">
+                <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto">
+                  <Monitor size={24} className="text-white/40" />
+                </div>
+                <p className="text-sm text-white/60">Select the video window to monitor</p>
+                <p className="text-xs text-white/40 max-w-sm mx-auto mb-4">
+                  *Browser security prevents direct screenshots of video. Click below to give the app permission to capture the video window in the background.
+                </p>
+                <button 
+                  onClick={startScreenShare}
+                  className="px-6 py-2 bg-orange-500 text-black font-bold rounded-full hover:bg-orange-400 transition-colors"
+                >
+                  SELECT VIDEO WINDOW
+                </button>
               </div>
-            </div>
+            ) : lastScreenshot ? (
+              <>
+                <img 
+                  src={lastScreenshot} 
+                  alt="Last Capture" 
+                  className="absolute inset-0 w-full h-full object-contain" 
+                />
+                <div className="absolute top-4 left-4 flex gap-2">
+                  <div className="bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg border border-white/10 text-xs font-mono flex items-center gap-2">
+                    <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
+                    LAST CAPTURED SCREENSHOT
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="text-white/60 font-mono text-sm animate-pulse text-center">
+                <p>Background capture active.</p>
+                <p className="text-xs mt-2">Waiting for first {autoAnalyzeInterval}s read... (Engine must be running)</p>
+              </div>
+            )}
+            
+            {/* Hidden video and canvas for capturing */}
+            <video ref={videoRef} autoPlay playsInline muted className="opacity-0 absolute inset-0 pointer-events-none w-1 h-1" />
+            <canvas ref={canvasRef} className="hidden" />
           </div>
 
           {/* Real-time Market Price Feed (The "Real" Price) */}
@@ -276,7 +373,7 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
                 <span className="text-[10px] text-white/40 uppercase tracking-widest font-mono">
-                  Live from Kraken
+                  Live Market Feed
                 </span>
               </div>
             </div>
@@ -360,18 +457,34 @@ export default function App() {
               </h3>
               <div className="grid grid-cols-2 gap-3">
                 <button 
-                  onClick={() => handleManualSignal('BUY')}
+                  onClick={() => handleManualSignal('LONG')}
                   className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-all group"
                 >
                   <ArrowUpRight className="text-green-500 group-hover:scale-110 transition-transform" />
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-green-500">Buy Signal</span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-green-500">Long Trade</span>
                 </button>
                 <button 
-                  onClick={() => handleManualSignal('SELL')}
+                  onClick={() => handleManualSignal('SHORT')}
                   className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all group"
                 >
                   <ArrowDownRight className="text-red-500 group-hover:scale-110 transition-transform" />
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-red-500">Sell Signal</span>
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-red-500">Short Trade</span>
+                </button>
+                <button 
+                  onClick={() => handleManualSignal('EXIT_LONG')}
+                  disabled={!activeTrades.some(t => t.type === 'LONG')}
+                  className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-green-500/10 border border-green-500/20 hover:bg-green-500/20 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowUpRight className="text-green-500 group-hover:scale-110 transition-transform" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-green-500">Exit Long</span>
+                </button>
+                <button 
+                  onClick={() => handleManualSignal('EXIT_SHORT')}
+                  disabled={!activeTrades.some(t => t.type === 'SHORT')}
+                  className="flex flex-col items-center justify-center gap-2 p-4 rounded-xl bg-red-500/10 border border-red-500/20 hover:bg-red-500/20 transition-all group disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <ArrowDownRight className="text-red-500 group-hover:scale-110 transition-transform" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-red-500">Exit Short</span>
                 </button>
               </div>
             </div>
@@ -393,7 +506,6 @@ export default function App() {
                     <th className="p-4">Entry / Exit</th>
                     <th className="p-4">Max PnL</th>
                     <th className="p-4">Max Loss</th>
-                    <th className="p-4">Trailed</th>
                     <th className="p-4 text-right">Booked PnL</th>
                   </tr>
                 </thead>
@@ -417,7 +529,6 @@ export default function App() {
                       </td>
                       <td className="p-4 text-green-500/60">+{trade.maxPnLReached.toFixed(2)}</td>
                       <td className="p-4 text-red-500/60">{trade.maxLossReached.toFixed(2)}</td>
-                      <td className="p-4 text-orange-500/60">{trade.pnlBeingTrailed.toFixed(2)}</td>
                       <td className="p-4 text-right font-bold">
                         <span className={trade.pnlBooked >= 0 ? "text-green-500" : "text-red-500"}>
                           {trade.pnlBooked >= 0 ? '+' : ''}{trade.pnlBooked.toFixed(2)}
@@ -427,7 +538,7 @@ export default function App() {
                   ))}
                   {trades.filter(t => t.status === 'CLOSED').length === 0 && (
                     <tr>
-                      <td colSpan={6} className="p-12 text-center text-white/20 uppercase tracking-widest">
+                      <td colSpan={5} className="p-12 text-center text-white/20 uppercase tracking-widest">
                         No closed trades yet
                       </td>
                     </tr>
@@ -440,23 +551,6 @@ export default function App() {
 
         {/* Right Column: Stats & Trades */}
         <div className="col-span-12 lg:col-span-4 space-y-6">
-          {/* Live Chart (Secondary) */}
-          <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden h-[300px]">
-            <div className="p-3 border-b border-white/10 bg-white/5 flex items-center justify-between">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-white/60">Market Execution Chart</span>
-              <span className="text-[10px] font-mono text-orange-500">LIVE</span>
-            </div>
-            <div className="h-[calc(100%-40px)]">
-              <TradingViewChart onPriceUpdate={(price) => {
-                setCurrentPrice(price);
-                setPriceSource('Datafeed');
-                engine.updateMarket(price);
-                setTrades(engine.getTrades());
-                setBalance(engine.getBalance());
-              }} />
-            </div>
-          </div>
-
           {/* Market Status */}
           <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-6">
@@ -530,12 +624,15 @@ export default function App() {
                           </span>
                           <span className="text-[10px] font-mono text-white/40">#{trade.id}</span>
                         </div>
-                        <span className={cn(
-                          "text-xs font-mono font-bold",
-                          trade.pnl >= 0 ? "text-green-500" : "text-red-500"
-                        )}>
-                          {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "text-xs font-mono font-bold transition-colors duration-200",
+                            trade.pnl >= 0 ? "text-green-500" : "text-red-500"
+                          )}>
+                            {trade.pnl >= 0 ? '+' : ''}{trade.pnl.toFixed(2)}
+                          </span>
+                          <span className="text-[8px] font-bold uppercase tracking-widest text-orange-500 animate-pulse">LIVE</span>
+                        </div>
                       </div>
                       <div className="grid grid-cols-2 gap-4 text-[10px] font-mono">
                         <div>
@@ -555,10 +652,6 @@ export default function App() {
                           <p className="text-red-500/80">{trade.maxLossReached.toFixed(2)}</p>
                         </div>
                         <div>
-                          <p className="text-white/30 uppercase mb-1">Trailed PnL</p>
-                          <p className="text-orange-500/80">{trade.pnlBeingTrailed.toFixed(2)}</p>
-                        </div>
-                        <div className="text-right">
                           <p className="text-white/30 uppercase mb-1">Current PnL</p>
                           <p className={cn(
                             "font-bold",
@@ -592,8 +685,8 @@ export default function App() {
                 signals.map((sig, i) => (
                   <div key={i} className="p-3 flex items-center justify-between hover:bg-white/5 transition-colors">
                     <div className="flex items-center gap-3">
-                      {sig.type === 'BUY' ? <ArrowUpRight size={14} className="text-green-500" /> : 
-                       sig.type === 'SELL' ? <ArrowDownRight size={14} className="text-red-500" /> :
+                      {sig.type === 'LONG' ? <ArrowUpRight size={14} className="text-green-500" /> : 
+                       sig.type === 'SHORT' ? <ArrowDownRight size={14} className="text-red-500" /> :
                        <Square size={12} className="text-white/40" />}
                       <div>
                         <p className="text-[10px] font-bold uppercase tracking-tight">{sig.type} SIGNAL</p>
