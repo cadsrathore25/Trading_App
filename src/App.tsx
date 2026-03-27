@@ -93,39 +93,43 @@ export default function App() {
 
   // TradingView Ticker Widget Injection
   useEffect(() => {
-    const container = document.getElementById('tv-ticker-container');
-    if (!container) return;
-    
-    // Clear any existing content first
-    container.innerHTML = '';
+    try {
+      const container = document.getElementById('tv-ticker-container');
+      if (!container) return;
+      
+      // Clear any existing content first
+      container.innerHTML = '';
 
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
-    script.async = true;
-    script.type = 'text/javascript';
-    script.innerHTML = JSON.stringify({
-      "symbols": [
-        { "proName": "FOREXCOM:SPX500", "title": "S&P 500" },
-        { "proName": "FOREXCOM:NSXUSD", "title": "US 100" },
-        { "proName": "FX_IDC:EURUSD", "title": "EUR/USD" },
-        { "proName": "BITSTAMP:BTCUSD", "title": "Bitcoin" },
-        { "proName": "BITSTAMP:ETHUSD", "title": "Ethereum" },
-        { "proName": "OANDA:XAUUSD", "title": "Gold" }
-      ],
-      "showSymbolLogo": true,
-      "colorTheme": "dark",
-      "isTransparent": true,
-      "displayMode": "adaptive",
-      "locale": "en"
-    });
-    
-    container.appendChild(script);
+      const script = document.createElement('script');
+      script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
+      script.async = true;
+      script.type = 'text/javascript';
+      script.innerHTML = JSON.stringify({
+        "symbols": [
+          { "proName": "FOREXCOM:SPX500", "title": "S&P 500" },
+          { "proName": "FOREXCOM:NSXUSD", "title": "US 100" },
+          { "proName": "FX_IDC:EURUSD", "title": "EUR/USD" },
+          { "proName": "BITSTAMP:BTCUSD", "title": "Bitcoin" },
+          { "proName": "BITSTAMP:ETHUSD", "title": "Ethereum" },
+          { "proName": "OANDA:XAUUSD", "title": "Gold" }
+        ],
+        "showSymbolLogo": true,
+        "colorTheme": "dark",
+        "isTransparent": true,
+        "displayMode": "adaptive",
+        "locale": "en"
+      });
+      
+      container.appendChild(script);
 
-    return () => {
-      if (container) {
-        container.innerHTML = '';
-      }
-    };
+      return () => {
+        if (container) {
+          container.innerHTML = '';
+        }
+      };
+    } catch (error) {
+      console.error("TradingView widget error:", error);
+    }
   }, []);
 
   // Update P&L history for the chart
@@ -265,7 +269,9 @@ export default function App() {
             setSignals(prev => [signal, ...prev].slice(0, 10));
             
             if (isAutoTradingRef.current) {
-              engine.processSignal(signal, currentPriceRef.current);
+              console.log("Processing signal:", signal);
+              const trade = engine.processSignal(signal, currentPriceRef.current);
+              console.log("Trade result:", trade);
               setTrades(engine.getTrades());
               setBalance(engine.getBalance());
             }
@@ -420,43 +426,6 @@ export default function App() {
             <canvas ref={canvasRef} className="hidden" />
           </div>
 
-          {/* Real-time Market Price Feed (The "Real" Price) */}
-          <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold flex items-center gap-2">
-                <Activity size={16} className="text-orange-500" />
-                REAL-TIME MARKET FEED (XAUUSD)
-              </h3>
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-                <span className="text-[10px] text-white/40 uppercase tracking-widest font-mono">
-                  Live Market Feed
-                </span>
-              </div>
-            </div>
-            
-            <div className="flex items-center justify-between">
-              <div className="flex items-baseline gap-3">
-                <span className="text-5xl font-mono font-bold tracking-tighter text-white">
-                  {currentPrice > 0 ? currentPrice.toFixed(2) : "FETCHING..."}
-                </span>
-                <span className="text-sm font-mono text-green-500 font-bold">+0.42%</span>
-              </div>
-              <div className="hidden md:block h-16 w-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={pnlHistory}>
-                    <defs>
-                      <linearGradient id="priceGradient" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#f97316" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#f97316" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <Area type="monotone" dataKey="pnl" stroke="#f97316" fillOpacity={1} fill="url(#priceGradient)" strokeWidth={2} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          </div>
 
           {/* Real-time Tracking Status & Controls */}
           <div className="grid grid-cols-2 gap-6">

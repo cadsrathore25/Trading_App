@@ -54,8 +54,13 @@ export async function analyzeChartFrame(base64Image: string): Promise<Signal | n
     
     if (result.signal === "NONE") return null;
 
+    let type: SignalType = 'LONG';
+    if (result.signal === 'BUY') type = 'LONG';
+    else if (result.signal === 'SELL') type = 'SHORT';
+    else return null;
+
     return {
-      type: result.signal as SignalType,
+      type,
       price: result.price,
       confidence: result.confidence,
       timestamp: new Date(),
