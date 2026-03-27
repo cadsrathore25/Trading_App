@@ -102,6 +102,7 @@ export default function App() {
     const script = document.createElement('script');
     script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
     script.async = true;
+    script.type = 'text/javascript';
     script.innerHTML = JSON.stringify({
       "symbols": [
         { "proName": "FOREXCOM:SPX500", "title": "S&P 500" },
@@ -173,7 +174,7 @@ export default function App() {
   }, [isAutoTrading]);
 
   // WORKAROUND: Use Screen Capture API to bypass CORS and get the actual pixels
-  const startScreenShare = async () => {
+  const startScreenShare = async (): Promise<boolean> => {
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       if (videoRef.current) {
@@ -183,10 +184,34 @@ export default function App() {
           setIsScreenShared(false);
           setLastScreenshot(null);
         };
+        return true;
       }
     } catch (err) {
       console.error("Error sharing screen:", err);
     }
+    return false;
+  };
+
+  // ROI-based change detection
+  const previousRoiRef = useRef<ImageData | null>(null);
+
+  // Helper to calculate pixel difference
+  const hasSignificantChange = (roiData: ImageData, prevRoiData: ImageData | null): boolean => {
+    if (!prevRoiData) return true;
+    
+    let diff = 0;
+    const data = roiData.data;
+    const prevData = prevRoiData.data;
+    
+    // Sample every 5th pixel for higher sensitivity
+    for (let i = 0; i < data.length; i += 20) {
+      diff += Math.abs(data[i] - prevData[i]) + 
+              Math.abs(data[i+1] - prevData[i+1]) + 
+              Math.abs(data[i+2] - prevData[i+2]);
+    }
+    
+    // Lowered threshold to be more sensitive to small signal icons
+    return diff > 20000;
   };
 
   // Background script to capture frames and analyze
@@ -199,7 +224,6 @@ export default function App() {
       const video = videoRef.current;
       const canvas = canvasRef.current;
       
-      // Ensure video has loaded metadata
       if (video.videoWidth === 0 || video.videoHeight === 0) return;
 
       canvas.width = video.videoWidth;
@@ -209,14 +233,29 @@ export default function App() {
       
       // 1. Take the screenshot of the background video stream
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const base64Image = canvas.toDataURL('image/jpeg', 0.8); // This is our "screenshot file"
       
-      // 2. Display only the last taken screenshot
+      // 2. Define ROI (Right-most 15% of the chart, focusing on signal area)
+      const roiWidth = Math.floor(canvas.width * 0.15);
+      const roiHeight = canvas.height;
+      const roiX = canvas.width - roiWidth;
+      
+      const roiData = ctx.getImageData(roiX, 0, roiWidth, roiHeight);
+      
+      // 3. Detect change
+      if (!hasSignificantChange(roiData, previousRoiRef.current)) {
+        return; // No significant change, skip analysis
+      }
+      
+      // Update previous ROI
+      previousRoiRef.current = roiData;
+      
+      // Capture full image for AI analysis
+      const base64Image = canvas.toDataURL('image/jpeg', 0.8);
       setLastScreenshot(base64Image);
       setLastAnalysis("Analyzing captured screenshot with Gemini AI...");
       
       try {
-        // 3. Send the screenshot file to the AI for analysis
+        // 4. Send the screenshot file to the AI for analysis
         const signal = await analyzeChartFrame(base64Image);
         if (signal) {
           // Check if the signal changed from the last recorded one
@@ -259,7 +298,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-white font-sans selection:bg-orange-500/30">
       {/* TradingView Ticker Tape */}
-      <div id="tv-ticker-container" className="h-10 border-b border-white/10 bg-black/50 overflow-hidden" />
+      <div id="tv-ticker-container" className="tradingview-widget-container h-10 border-b border-white/10 bg-black/50 overflow-hidden" />
 
       {/* Status Bar */}
       <div className="bg-orange-500 text-black py-1 px-6 flex justify-between items-center text-[10px] font-bold tracking-widest uppercase">
@@ -288,9 +327,18 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-lg font-bold tracking-tight">GOLD SIGNAL <span className="text-orange-500">ALGO</span></h1>
-              <div className="flex items-center gap-2 text-[10px] text-white/40 uppercase tracking-widest font-mono">
-                <span className="flex h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-                Live Market Feed
+              <div className="flex items-center gap-4 text-[10px] text-white/40 uppercase tracking-widest font-mono">
+                <span className="flex items-center gap-2">
+                  <span className="flex h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
+                  Live Market Feed
+                </span>
+                <span className={cn(
+                  "flex items-center gap-2",
+                  isScreenShared ? "text-green-500" : "text-red-500"
+                )}>
+                  <span className={cn("flex h-1.5 w-1.5 rounded-full", isScreenShared ? "bg-green-500 animate-pulse" : "bg-red-500")} />
+                  {isScreenShared ? "Monitoring Active" : "Monitoring Inactive"}
+                </span>
               </div>
             </div>
           </div>
@@ -301,7 +349,16 @@ export default function App() {
               <span className="text-xl font-mono font-bold text-orange-400">${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
             </div>
             <button 
-              onClick={() => setIsAutoTrading(!isAutoTrading)}
+              onClick={async () => {
+                if (!isScreenShared) {
+                  const shared = await startScreenShare();
+                  if (!shared) {
+                    alert("Please select a window to start monitoring.");
+                    return;
+                  }
+                }
+                setIsAutoTrading(!isAutoTrading);
+              }}
               className={cn(
                 "flex items-center gap-2 px-6 py-2.5 rounded-full font-bold transition-all active:scale-95",
                 isAutoTrading 

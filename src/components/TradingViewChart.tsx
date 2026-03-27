@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, SeriesMarker, createSeriesMarkers, ISeriesMarkersPluginApi } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, SeriesMarker } from 'lightweight-charts';
 import { datafeed, Bar } from '../services/datafeedService';
 import { Signal } from '../types';
 
@@ -18,7 +18,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
-  const markersPluginRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -56,9 +55,6 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
     chartRef.current = chart;
     seriesRef.current = candlestickSeries;
     
-    // Initialize markers plugin
-    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
-
     // Initial Data Load
     const loadInitialData = async () => {
       const bars = await datafeed.getBars('XAUUSD', '1', Math.floor(Date.now() / 1000) - 86400, Math.floor(Date.now() / 1000));
@@ -107,17 +103,18 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
 
   // Handle Signal Markers
   useEffect(() => {
-    if (!markersPluginRef.current) return;
+    if (!seriesRef.current) return;
 
     if (!showSignal || !signals || signals.length === 0) {
-      markersPluginRef.current.setMarkers([]);
+      (seriesRef.current as any).setMarkers([]);
       return;
     }
 
     // Only show the last signal
     const lastSignal = signals[signals.length - 1];
     if (lastSignal.type === 'EXIT_LONG' || lastSignal.type === 'EXIT_SHORT') {
-      markersPluginRef.current.setMarkers([]);
+      const series = seriesRef.current as any;
+      series.setMarkers([]);
       return;
     }
 
@@ -132,7 +129,8 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({ onPriceUpdat
       text: lastSignal.type,
     };
 
-    markersPluginRef.current.setMarkers([marker]);
+    const series = seriesRef.current as any;
+    series.setMarkers([marker]);
   }, [signals, showSignal]);
 
   return <div ref={chartContainerRef} className="w-full h-full" />;
