@@ -93,43 +93,43 @@ export default function App() {
 
   // TradingView Ticker Widget Injection
   useEffect(() => {
-    try {
-      const container = document.getElementById('tv-ticker-container');
-      if (!container) return;
-      
-      // Clear any existing content first
-      container.innerHTML = '';
+    const injectWidget = () => {
+      try {
+        const container = document.getElementById('tv-ticker-container');
+        if (!container) return;
+        
+        // Prevent duplicate script injection
+        if (container.querySelector('script')) return;
 
-      const script = document.createElement('script');
-      script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
-      script.async = true;
-      script.type = 'text/javascript';
-      script.innerHTML = JSON.stringify({
-        "symbols": [
-          { "proName": "FOREXCOM:SPX500", "title": "S&P 500" },
-          { "proName": "FOREXCOM:NSXUSD", "title": "US 100" },
-          { "proName": "FX_IDC:EURUSD", "title": "EUR/USD" },
-          { "proName": "BITSTAMP:BTCUSD", "title": "Bitcoin" },
-          { "proName": "BITSTAMP:ETHUSD", "title": "Ethereum" },
-          { "proName": "OANDA:XAUUSD", "title": "Gold" }
-        ],
-        "showSymbolLogo": true,
-        "colorTheme": "dark",
-        "isTransparent": true,
-        "displayMode": "adaptive",
-        "locale": "en"
-      });
-      
-      container.appendChild(script);
+        const script = document.createElement('script');
+        script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-ticker-tape.js';
+        script.async = true;
+        script.type = 'text/javascript';
+        script.innerHTML = JSON.stringify({
+          "symbols": [
+            { "proName": "FOREXCOM:SPX500", "title": "S&P 500" },
+            { "proName": "FOREXCOM:NSXUSD", "title": "US 100" },
+            { "proName": "FX_IDC:EURUSD", "title": "EUR/USD" },
+            { "proName": "BITSTAMP:BTCUSD", "title": "Bitcoin" },
+            { "proName": "BITSTAMP:ETHUSD", "title": "Ethereum" },
+            { "proName": "OANDA:XAUUSD", "title": "Gold" }
+          ],
+          "showSymbolLogo": true,
+          "colorTheme": "dark",
+          "isTransparent": true,
+          "displayMode": "adaptive",
+          "locale": "en"
+        });
+        
+        container.appendChild(script);
+      } catch (error) {
+        console.error("TradingView widget error:", error);
+      }
+    };
 
-      return () => {
-        if (container) {
-          container.innerHTML = '';
-        }
-      };
-    } catch (error) {
-      console.error("TradingView widget error:", error);
-    }
+    // Delay injection slightly to ensure the DOM is fully ready
+    const timer = setTimeout(injectWidget, 500);
+    return () => clearTimeout(timer);
   }, []);
 
   // Update P&L history for the chart
@@ -163,7 +163,9 @@ export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isScreenShared, setIsScreenShared] = useState(false);
   const [lastScreenshot, setLastScreenshot] = useState<string | null>(null);
-
+  const [tokensSaved, setTokensSaved] = useState(0);
+  const [roiStatus, setRoiStatus] = useState("Waiting...");
+  
   // Refs to avoid resetting the auto-analysis interval
   const currentPriceRef = useRef(currentPrice);
   const isAutoTradingRef = useRef(isAutoTrading);
@@ -177,9 +179,62 @@ export default function App() {
     isAutoTradingRef.current = isAutoTrading;
   }, [isAutoTrading]);
 
+  // New ROI State
+  const [isSettingRoi, setIsSettingRoi] = useState(false);
+  const [roi, setRoi] = useState({ x: 0.51, y: 0, width: 0.19, height: 0.90 }); // User-specified ROI
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+  const roiOverlayRef = useRef<HTMLDivElement>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!isSettingRoi) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    setStartPos({ x, y });
+    setIsDrawing(true);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isSettingRoi || !isDrawing) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    
+    setRoi({
+      x: Math.min(startPos.x, x),
+      y: Math.min(startPos.y, y),
+      width: Math.abs(x - startPos.x),
+      height: Math.abs(y - startPos.y)
+    });
+  };
+
+  const handleMouseUp = () => {
+    setIsDrawing(false);
+  };
+
+
+  // Signal Cooldown
+  const lastSignalTimestampRef = useRef<number>(0);
+  const COOLDOWN_MS = 120000; // 2 minutes cooldown
+
+  useEffect(() => {
+    currentPriceRef.current = currentPrice;
+  }, [currentPrice]);
+
+  useEffect(() => {
+    isAutoTradingRef.current = isAutoTrading;
+  }, [isAutoTrading]);
+
   // WORKAROUND: Use Screen Capture API to bypass CORS and get the actual pixels
   const startScreenShare = async (): Promise<boolean> => {
     try {
+      // Check if the browser supports screen sharing
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        alert("Screen sharing is not supported in this browser. Please use a desktop browser (Chrome, Edge, Safari, Firefox) and ensure you are in a secure context (HTTPS). Mobile browsers do not support screen sharing.");
+        return false;
+      }
+
       const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -192,6 +247,9 @@ export default function App() {
       }
     } catch (err) {
       console.error("Error sharing screen:", err);
+      if (err instanceof Error) {
+        alert(`Screen sharing failed: ${err.message}`);
+      }
     }
     return false;
   };
@@ -207,15 +265,15 @@ export default function App() {
     const data = roiData.data;
     const prevData = prevRoiData.data;
     
-    // Sample every 5th pixel for higher sensitivity
-    for (let i = 0; i < data.length; i += 20) {
+    // Sample every 50th pixel for lower sensitivity
+    for (let i = 0; i < data.length; i += 50) {
       diff += Math.abs(data[i] - prevData[i]) + 
               Math.abs(data[i+1] - prevData[i+1]) + 
               Math.abs(data[i+2] - prevData[i+2]);
     }
     
-    // Lowered threshold to be more sensitive to small signal icons
-    return diff > 20000;
+    // Increased threshold to ignore minor candle/price changes
+    return diff > 200000;
   };
 
   // Background script to capture frames and analyze
@@ -238,17 +296,29 @@ export default function App() {
       // 1. Take the screenshot of the background video stream
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      // 2. Define ROI (Right-most 15% of the chart, focusing on signal area)
-      const roiWidth = Math.floor(canvas.width * 0.15);
-      const roiHeight = canvas.height;
-      const roiX = canvas.width - roiWidth;
+      // 2. Define ROI (Dynamic based on user selection)
+      const roiWidth = Math.floor(canvas.width * roi.width);
+      const roiHeight = Math.floor(canvas.height * roi.height);
+      const roiX = Math.floor(canvas.width * roi.x);
+      const roiY = Math.floor(canvas.height * roi.y);
       
-      const roiData = ctx.getImageData(roiX, 0, roiWidth, roiHeight);
+      const roiData = ctx.getImageData(roiX, roiY, roiWidth, roiHeight);
       
       // 3. Detect change
       if (!hasSignificantChange(roiData, previousRoiRef.current)) {
+        setRoiStatus("No new icons detected in ROI. Skipping Gemini.");
+        setTokensSaved(prev => prev + 1);
         return; // No significant change, skip analysis
       }
+      
+      // 4. Check Cooldown
+      const now = Date.now();
+      if (now - lastSignalTimestampRef.current < COOLDOWN_MS) {
+        setRoiStatus("Change detected, but in cooldown. Skipping Gemini.");
+        return;
+      }
+      
+      setRoiStatus("Change detected in ROI. Sending to Gemini...");
       
       // Update previous ROI
       previousRoiRef.current = roiData;
@@ -259,12 +329,13 @@ export default function App() {
       setLastAnalysis("Analyzing captured screenshot with Gemini AI...");
       
       try {
-        // 4. Send the screenshot file to the AI for analysis
+        // 5. Send the screenshot file to the AI for analysis
         const signal = await analyzeChartFrame(base64Image);
         if (signal) {
           // Check if the signal changed from the last recorded one
           if (lastSignalTypeRef.current !== signal.type) {
             lastSignalTypeRef.current = signal.type;
+            lastSignalTimestampRef.current = now; // Reset cooldown
             
             setSignals(prev => [signal, ...prev].slice(0, 10));
             
@@ -383,7 +454,32 @@ export default function App() {
         {/* Left Column: Video & Market Control */}
         <div className="col-span-12 lg:col-span-8 space-y-6">
           {/* Screen Share: The Signal Source */}
-          <div className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl group flex items-center justify-center">
+          <div 
+            className="relative aspect-video bg-black rounded-2xl overflow-hidden border border-white/10 shadow-2xl group flex items-center justify-center"
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+          >
+            {/* ROI Overlay for setting the area */}
+            {isSettingRoi && (
+              <div 
+                ref={roiOverlayRef}
+                className="absolute border-2 border-orange-500 bg-orange-500/20 cursor-crosshair z-10"
+                style={{
+                  left: `${roi.x * 100}%`,
+                  top: `${roi.y * 100}%`,
+                  width: `${roi.width * 100}%`,
+                  height: `${roi.height * 100}%`
+                }}
+              >
+                <div className="absolute top-2 left-2 bg-black/60 text-white text-[10px] p-1 rounded">
+                  {Math.round(roi.x * 100)}%, {Math.round(roi.y * 100)}% 
+                  ({Math.round(roi.width * 100)}% x {Math.round(roi.height * 100)}%)
+                </div>
+              </div>
+            )}
+
             {!isScreenShared ? (
               <div className="text-center space-y-4">
                 <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mx-auto">
@@ -393,12 +489,53 @@ export default function App() {
                 <p className="text-xs text-white/40 max-w-sm mx-auto mb-4">
                   *Browser security prevents direct screenshots of video. Click below to give the app permission to capture the video window in the background.
                 </p>
-                <button 
-                  onClick={startScreenShare}
-                  className="px-6 py-2 bg-orange-500 text-black font-bold rounded-full hover:bg-orange-400 transition-colors"
-                >
-                  SELECT VIDEO WINDOW
-                </button>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                  <button 
+                    onClick={startScreenShare}
+                    className="px-6 py-2 bg-orange-500 text-black font-bold rounded-full hover:bg-orange-400 transition-colors"
+                  >
+                    SELECT VIDEO WINDOW
+                  </button>
+                  <label className="px-6 py-2 bg-white/10 text-white font-bold rounded-full hover:bg-white/20 transition-colors cursor-pointer border border-white/20">
+                    UPLOAD SCREENSHOT
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = async (event) => {
+                            const base64 = event.target?.result as string;
+                            setLastScreenshot(base64);
+                            setIsScreenShared(true); // Treat as active for UI purposes
+                            setLastAnalysis("Analyzing uploaded screenshot...");
+                            
+                            try {
+                              const signal = await analyzeChartFrame(base64);
+                              if (signal) {
+                                setSignals(prev => [signal, ...prev].slice(0, 10));
+                                if (isAutoTradingRef.current) {
+                                  engine.processSignal(signal, currentPriceRef.current);
+                                  setTrades(engine.getTrades());
+                                  setBalance(engine.getBalance());
+                                }
+                                setLastAnalysis(`New Signal Detected: ${signal.type} at ${signal.price || currentPriceRef.current}`);
+                              } else {
+                                setLastAnalysis("No clear signal detected in upload.");
+                              }
+                            } catch (err) {
+                              console.error(err);
+                              setLastAnalysis("Analysis failed.");
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </label>
+                </div>
               </div>
             ) : lastScreenshot ? (
               <>
@@ -412,6 +549,15 @@ export default function App() {
                     <div className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
                     LAST CAPTURED SCREENSHOT
                   </div>
+                  <button 
+                    onClick={() => setIsSettingRoi(!isSettingRoi)}
+                    className={cn(
+                      "px-3 py-1.5 rounded-lg border text-xs font-mono transition-colors",
+                      isSettingRoi ? "bg-orange-500 text-black border-orange-500" : "bg-black/60 border-white/10 text-white"
+                    )}
+                  >
+                    {isSettingRoi ? "SAVING ROI..." : "SET ROI"}
+                  </button>
                 </div>
               </>
             ) : (
@@ -448,7 +594,15 @@ export default function App() {
               
               <div className="bg-black/40 p-4 rounded-xl border border-white/5 space-y-3">
                 <div className="flex justify-between items-center text-[10px] font-mono">
-                  <span className="text-white/30">Last Scan Status</span>
+                  <span className="text-white/30">ROI Status (30%)</span>
+                  <span className="text-blue-400">{roiStatus}</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px] font-mono">
+                  <span className="text-white/30">Tokens Saved</span>
+                  <span className="text-green-400 font-bold">{tokensSaved} API Calls</span>
+                </div>
+                <div className="flex justify-between items-center text-[10px] font-mono">
+                  <span className="text-white/30">Gemini Analysis</span>
                   <span className="text-orange-400">{lastAnalysis || "Waiting..."}</span>
                 </div>
                 <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">

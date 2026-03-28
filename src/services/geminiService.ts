@@ -3,7 +3,7 @@ import { Signal, SignalType } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
-export async function analyzeChartFrame(base64Image: string): Promise<Signal | null> {
+export async function analyzeChartFrame(base64Image: string, retries = 2): Promise<Signal | null> {
   try {
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -11,10 +11,15 @@ export async function analyzeChartFrame(base64Image: string): Promise<Signal | n
         {
           parts: [
             {
-              text: `Analyze this live trading chart. Look for the most recent signal marker. 
-              To find the most recent signal, scan the chart from RIGHT to LEFT. The very first signal you encounter when moving from the right edge of the chart towards the left is the current active signal.
-              The signals are typically labeled '+Smart Buy' (green) or '+Smart Sell' (red/pink). 
-              What is the most recent signal? Respond with ONLY 'BUY', 'SELL', or 'NONE' if no clear signal is found.
+              text: `Analyze this live trading chart. 
+              
+              CRITICAL: You must first scan the chart for the presence of a 'Buy', 'Sell', '+Smart Buy', or '+Smart Sell' icon. 
+              If NO such signal icon is clearly visible in the chart, you MUST return 'NONE' for the signal.
+              
+              Do NOT infer signals based on chart trends, candle colors, or indicator lines. Only report a signal if an explicit text-based icon is present.
+              
+              If an icon is present, identify the signal type based on the text on the icon.
+              Respond with ONLY 'BUY', 'SELL', or 'NONE' if no clear signal icon is found.
               Also identify the current price if visible.`,
             },
             {
@@ -67,6 +72,10 @@ export async function analyzeChartFrame(base64Image: string): Promise<Signal | n
     };
   } catch (error) {
     console.error("Error analyzing chart frame:", error);
+    if (retries > 0) {
+      console.log(`Retrying analysis... (${retries} retries left)`);
+      return analyzeChartFrame(base64Image, retries - 1);
+    }
     return null;
   }
 }
