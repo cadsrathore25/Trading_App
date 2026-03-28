@@ -35,7 +35,7 @@ import { format } from 'date-fns';
 
 import { datafeed } from './services/datafeedService';
 import { TradingEngine } from './services/tradingService';
-import { analyzeChartFrame } from './services/geminiService';
+import { detectSignal, initCvService } from './services/cvService';
 import { Trade, Signal, SignalType } from './types';
 import { cn } from './lib/utils';
 
@@ -219,6 +219,11 @@ export default function App() {
   const COOLDOWN_MS = 120000; // 2 minutes cooldown
 
   useEffect(() => {
+    initCvService();
+  }, []);
+
+
+  useEffect(() => {
     currentPriceRef.current = currentPrice;
   }, [currentPrice]);
 
@@ -306,7 +311,7 @@ export default function App() {
       
       // 3. Detect change
       if (!hasSignificantChange(roiData, previousRoiRef.current)) {
-        setRoiStatus("No new icons detected in ROI. Skipping Gemini.");
+        setRoiStatus("No new icons detected in ROI. Skipping analysis.");
         setTokensSaved(prev => prev + 1);
         return; // No significant change, skip analysis
       }
@@ -314,11 +319,11 @@ export default function App() {
       // 4. Check Cooldown
       const now = Date.now();
       if (now - lastSignalTimestampRef.current < COOLDOWN_MS) {
-        setRoiStatus("Change detected, but in cooldown. Skipping Gemini.");
+        setRoiStatus("Change detected, but in cooldown. Skipping analysis.");
         return;
       }
       
-      setRoiStatus("Change detected in ROI. Sending to Gemini...");
+      setRoiStatus("Change detected in ROI. Analyzing locally...");
       
       // Update previous ROI
       previousRoiRef.current = roiData;
@@ -326,12 +331,18 @@ export default function App() {
       // Capture full image for AI analysis
       const base64Image = canvas.toDataURL('image/jpeg', 0.8);
       setLastScreenshot(base64Image);
-      setLastAnalysis("Analyzing captured screenshot with Gemini AI...");
+      setLastAnalysis("Analyzing captured screenshot with local CV...");
       
       try {
         // 5. Send the screenshot file to the AI for analysis
-        const signal = await analyzeChartFrame(base64Image);
-        if (signal) {
+        const signalType = await detectSignal(base64Image);
+        if (signalType) {
+          const signal: Signal = {
+            type: signalType,
+            price: 0, // Not available via CV
+            confidence: 1.0,
+            timestamp: new Date(),
+          };
           // Check if the signal changed from the last recorded one
           if (lastSignalTypeRef.current !== signal.type) {
             lastSignalTypeRef.current = signal.type;
@@ -513,8 +524,14 @@ export default function App() {
                             setLastAnalysis("Analyzing uploaded screenshot...");
                             
                             try {
-                              const signal = await analyzeChartFrame(base64);
-                              if (signal) {
+                              const signalType = await detectSignal(base64);
+                              if (signalType) {
+                                const signal: Signal = {
+                                  type: signalType,
+                                  price: 0, // Not available via CV
+                                  confidence: 1.0,
+                                  timestamp: new Date(),
+                                };
                                 setSignals(prev => [signal, ...prev].slice(0, 10));
                                 if (isAutoTradingRef.current) {
                                   engine.processSignal(signal, currentPriceRef.current);
@@ -602,7 +619,7 @@ export default function App() {
                   <span className="text-green-400 font-bold">{tokensSaved} API Calls</span>
                 </div>
                 <div className="flex justify-between items-center text-[10px] font-mono">
-                  <span className="text-white/30">Gemini Analysis</span>
+                  <span className="text-white/30">Local CV Analysis</span>
                   <span className="text-orange-400">{lastAnalysis || "Waiting..."}</span>
                 </div>
                 <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden">
